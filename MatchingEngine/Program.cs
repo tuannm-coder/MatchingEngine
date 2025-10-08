@@ -1,7 +1,6 @@
 ﻿using System.Diagnostics;
 using Enum;
 using MatchEngine.Models;
-using MatchingEngine.Extension;
 
 namespace MatchingEngine;
 
@@ -9,245 +8,198 @@ class Program
 {
     static void Main(string[] args)
     {
-        Console.WriteLine("=== Matching Engine Performance Test ===\n");
+        Console.WriteLine("╔═══════════════════════════════════════════════════════════╗");
+        Console.WriteLine("║          MATCHING ENGINE - ORDER TEST                     ║");
+        Console.WriteLine("╚═══════════════════════════════════════════════════════════╝\n");
 
-        // Test với số lượng orders khác nhau
-        var testCases = new[] { 10000000 };
+        // Get number of orders from user
+        Console.Write("Enter number of orders to generate (default 100000): ");
+        var input = Console.ReadLine();
+        var orderCount = string.IsNullOrWhiteSpace(input) ? 100000 : int.Parse(input);
 
-        foreach (var orderCount in testCases)
+        Console.WriteLine($"\n═══════════════════════════════════════════════════════════");
+        Console.WriteLine($"  Step 1: Generating {orderCount:N0} orders...");
+        Console.WriteLine($"  Distribution: Limit (60%), Market (20%), IOC (10%), BOC (5%), FOK (5%)");
+        Console.WriteLine($"═══════════════════════════════════════════════════════════\n");
+
+        // Generate orders (NOT timed)
+        var genStopwatch = Stopwatch.StartNew();
+        var orders = GenerateRandomOrders(orderCount, "BTCUSDT");
+        genStopwatch.Stop();
+        
+        Console.WriteLine($"  Orders generated in {genStopwatch.ElapsedMilliseconds:N0}ms");
+        Console.WriteLine($"  Orders stored in memory: {orders.Count:N0}\n");
+
+        Console.WriteLine($"═══════════════════════════════════════════════════════════");
+        Console.WriteLine($"  Step 2: Initializing matching engine...");
+        Console.WriteLine($"═══════════════════════════════════════════════════════════\n");
+
+        // Initialize engine
+        var engine = new MatchingEngine(
+            stepSize: 0.01m,
+            pricePrecision: 2,
+            makerFeeRate: 0.001m,
+            takerFeeRate: 0.002m
+        );
+
+        Console.WriteLine($"  Engine ready!\n");
+
+        Console.WriteLine($"═══════════════════════════════════════════════════════════");
+        Console.WriteLine($"  Step 3: Processing {orders.Count:N0} orders...");
+        Console.WriteLine($"═══════════════════════════════════════════════════════════\n");
+
+        // NOW start timing (only for processing)
+        var stopwatch = Stopwatch.StartNew();
+
+        int processedOrders = 0;
+        int acceptedOrders = 0;
+        int rejectedOrders = 0;
+        int matchedOrders = 0;
+        int bocRejected = 0;
+        int fokRejected = 0;
+
+        foreach (var order in orders)
         {
-            Console.WriteLine($"\n--- Testing with {orderCount:N0} orders ---");
-            
-            //// Test Limit Orders
-            //TestLimitOrders(orderCount);
-            
-            //// Test Market Orders
-            //TestMarketOrders(orderCount);
-            
-            // Test Mixed Orders (Limit + Market)
-            TestMixedOrders(orderCount);
+            var result = engine.AddOrder(order, order.Timestamp);
+            processedOrders++;
+
+            if (result == MatchState.OrderAccepted)
+            {
+                acceptedOrders++;
+                if (order.IsFilled)
+                    matchedOrders++;
+            }
+            else if (result == MatchState.BOCCannotBook)
+            {
+                bocRejected++;
+                rejectedOrders++;
+            }
+            else if (result == MatchState.FOKCannotFill)
+            {
+                fokRejected++;
+                rejectedOrders++;
+            }
+            else
+            {
+                rejectedOrders++;
+            }
         }
 
-        Console.WriteLine("\n=== Test Complete ===");
+        stopwatch.Stop();
+        var tps = processedOrders / stopwatch.Elapsed.TotalSeconds;
+
+        // Print results
+        Console.WriteLine($"\n╔═══════════════════════════════════════════════════════════╗");
+        Console.WriteLine($"║                    RESULTS                                ║");
+        Console.WriteLine($"╚═══════════════════════════════════════════════════════════╝\n");
+
+        Console.WriteLine($"  ┌─────────────────────────────────────────────────────────┐");
+        Console.WriteLine($"  │ ORDER STATISTICS                                        │");
+        Console.WriteLine($"  └─────────────────────────────────────────────────────────┘");
+        Console.WriteLine($"  Orders Processed:    {processedOrders:N0}");
+        Console.WriteLine($"  Accepted:            {acceptedOrders:N0} ({acceptedOrders * 100.0 / processedOrders:F1}%)");
+        Console.WriteLine($"  Rejected:            {rejectedOrders:N0} ({rejectedOrders * 100.0 / processedOrders:F1}%)");
+        Console.WriteLine($"    - BOC Rejected:    {bocRejected:N0}");
+        Console.WriteLine($"    - FOK Rejected:    {fokRejected:N0}");
+        Console.WriteLine($"  Fully Matched:       {matchedOrders:N0}");
+        Console.WriteLine($"");
+        Console.WriteLine($"  ┌─────────────────────────────────────────────────────────┐");
+        Console.WriteLine($"  │ PERFORMANCE METRICS (Processing Only)                   │");
+        Console.WriteLine($"  └─────────────────────────────────────────────────────────┘");
+        Console.WriteLine($"  Processing Time:     {stopwatch.ElapsedMilliseconds:N0}ms ({stopwatch.Elapsed.TotalSeconds:F2}s)");
+        Console.WriteLine($"  Throughput (TPS):    {tps:N0} orders/second");
+        Console.WriteLine($"  Avg Latency:         {(stopwatch.ElapsedMilliseconds * 1000.0 / processedOrders):F3} μs/order");
+        Console.WriteLine($"");
+        Console.WriteLine($"  ┌─────────────────────────────────────────────────────────┐");
+        Console.WriteLine($"  │ ORDER BOOK STATE                                        │");
+        Console.WriteLine($"  └─────────────────────────────────────────────────────────┘");
+        Console.WriteLine($"  Bid Levels:          {engine.Books.BidLevelCount}");
+        Console.WriteLine($"  Ask Levels:          {engine.Books.AskLevelCount}");
+        Console.WriteLine($"  Total Price Levels:  {engine.Books.BidLevelCount + engine.Books.AskLevelCount}");
+        Console.WriteLine($"  Orders in Book:      {engine.Books.TotalOrders:N0}");
+        Console.WriteLine($"  Best Bid:            ${engine.Books.BestBidPrice:N2}");
+        Console.WriteLine($"  Best Ask:            ${engine.Books.BestAskPrice:N2}");
+        Console.WriteLine($"  Spread:              ${(engine.Books.BestAskPrice - engine.Books.BestBidPrice):N2}");
+
+        var memoryMB = GC.GetTotalMemory(false) / (1024.0 * 1024.0);
+        Console.WriteLine($"");
+        Console.WriteLine($"  ┌─────────────────────────────────────────────────────────┐");
+        Console.WriteLine($"  │ MEMORY USAGE                                            │");
+        Console.WriteLine($"  └─────────────────────────────────────────────────────────┘");
+        Console.WriteLine($"  Total Memory:        {memoryMB:F2} MB");
+        Console.WriteLine($"  Per Order in Book:   {(memoryMB * 1024 * 1024 / engine.Books.TotalOrders):F0} bytes");
+        Console.WriteLine($"");
+        Console.WriteLine($"  ┌─────────────────────────────────────────────────────────┐");
+        Console.WriteLine($"  │ TIMING BREAKDOWN                                        │");
+        Console.WriteLine($"  └─────────────────────────────────────────────────────────┘");
+        Console.WriteLine($"  Generation Time:     {genStopwatch.ElapsedMilliseconds:N0}ms (not counted in TPS)");
+        Console.WriteLine($"  Processing Time:     {stopwatch.ElapsedMilliseconds:N0}ms (pure engine performance)");
+        Console.WriteLine($"  Total Time:          {(genStopwatch.ElapsedMilliseconds + stopwatch.ElapsedMilliseconds):N0}ms");
+
+        Console.WriteLine($"\n╔═══════════════════════════════════════════════════════════╗");
+        Console.WriteLine($"║                  COMPLETE! ✅                             ║");
+        Console.WriteLine($"╚═══════════════════════════════════════════════════════════╝");
+
         Console.ReadLine();
     }
 
-    static void TestLimitOrders(int orderCount)
+    static List<Ordering> GenerateRandomOrders(int count, string symbol)
     {
-        var engine = new MatchingEngine(
-            stepSize: 0.01m,
-            pricePrecision: 2,
-            makerFeeRate: 0.001m,
-            takerFeeRate: 0.002m
-        );
-
-        var orders = GenerateLimitOrders(orderCount, "BTCUSDT");
-        var stopwatch = Stopwatch.StartNew();
-        
-        int processedOrders = 0;
-        int matchedOrders = 0;
-
-        foreach (var order in orders)
-        {
-            var result = engine.AddOrder(order, order.Timestamp);
-            processedOrders++;
-            
-            if (result == MatchState.OrderAccepted)
-            {
-                if (order.IsFilled)
-                    matchedOrders++;
-            }
-        }
-
-        stopwatch.Stop();
-        var tps = processedOrders / stopwatch.Elapsed.TotalSeconds;
-
-        Console.WriteLine($"  [LIMIT ORDERS]");
-        Console.WriteLine($"    Total Orders: {processedOrders:N0}");
-        Console.WriteLine($"    Matched Orders: {matchedOrders:N0}");
-        Console.WriteLine($"    Time: {stopwatch.ElapsedMilliseconds}ms");
-        Console.WriteLine($"    TPS: {tps:N0} orders/second");
-        Console.WriteLine($"    Order Book - Bid Levels: {engine.Books.BidLevelCount}, Ask Levels: {engine.Books.AskLevelCount}");
-        Console.WriteLine($"    Best Bid: {engine.Books.BestBidPrice}, Best Ask: {engine.Books.BestAskPrice}");
-    }
-
-    static void TestMarketOrders(int orderCount)
-    {
-        var engine = new MatchingEngine(
-            stepSize: 0.01m,
-            pricePrecision: 2,
-            makerFeeRate: 0.001m,
-            takerFeeRate: 0.002m
-        );
-
-        // Tạo liquidity trước (limit orders)
-        var liquidityOrders = GenerateLimitOrders(orderCount / 2, "BTCUSDT");
-        foreach (var order in liquidityOrders)
-        {
-            engine.AddOrder(order, order.Timestamp);
-        }
-
-        // Tạo market orders
-        var marketOrders = GenerateMarketOrders(orderCount / 2, "BTCUSDT");
-        var stopwatch = Stopwatch.StartNew();
-        
-        int processedOrders = 0;
-        int matchedOrders = 0;
-
-        foreach (var order in marketOrders)
-        {
-            var result = engine.AddOrder(order, order.Timestamp);
-            processedOrders++;
-            
-            if (result == MatchState.OrderAccepted)
-            {
-                if (order.IsFilled)
-                    matchedOrders++;
-            }
-        }
-
-        stopwatch.Stop();
-        var tps = processedOrders / stopwatch.Elapsed.TotalSeconds;
-
-        Console.WriteLine($"  [MARKET ORDERS]");
-        Console.WriteLine($"    Total Orders: {processedOrders:N0}");
-        Console.WriteLine($"    Matched Orders: {matchedOrders:N0}");
-        Console.WriteLine($"    Time: {stopwatch.ElapsedMilliseconds}ms");
-        Console.WriteLine($"    TPS: {tps:N0} orders/second");
-        Console.WriteLine($"    Order Book - Bid Levels: {engine.Books.BidLevelCount}, Ask Levels: {engine.Books.AskLevelCount}");
-    }
-
-    static void TestMixedOrders(int orderCount)
-    {
-        var engine = new MatchingEngine(
-            stepSize: 0.01m,
-            pricePrecision: 2,
-            makerFeeRate: 0.001m,
-            takerFeeRate: 0.002m
-        );
-
-        var orders = GenerateMixedOrders(orderCount, "BTCUSDT");
-        var stopwatch = Stopwatch.StartNew();
-        
-        int processedOrders = 0;
-        int matchedOrders = 0;
-        int limitOrders = 0;
-        int marketOrders = 0;
-
-        foreach (var order in orders)
-        {
-            var result = engine.AddOrder(order, order.Timestamp);
-            processedOrders++;
-            
-            if (order.Price == 0)
-                marketOrders++;
-            else
-                limitOrders++;
-            
-            if (result == MatchState.OrderAccepted)
-            {
-                if (order.IsFilled)
-                    matchedOrders++;
-            }
-        }
-
-        stopwatch.Stop();
-        var tps = processedOrders / stopwatch.Elapsed.TotalSeconds;
-
-        Console.WriteLine($"  [MIXED ORDERS (Limit + Market)]");
-        Console.WriteLine($"    Total Orders: {processedOrders:N0} (Limit: {limitOrders:N0}, Market: {marketOrders:N0})");
-        Console.WriteLine($"    Matched Orders: {matchedOrders:N0}");
-        Console.WriteLine($"    Time: {stopwatch.ElapsedMilliseconds}ms");
-        Console.WriteLine($"    TPS: {tps:N0} orders/second");
-        Console.WriteLine($"    Order Book - Bid Levels: {engine.Books.BidLevelCount}, Ask Levels: {engine.Books.AskLevelCount}");
-    }
-
-    static List<Ordering> GenerateLimitOrders(int count, string symbol)
-    {
-        var orders = new List<Ordering>();
-        var random = new Random(42); // Fixed seed for reproducibility
-        var basePrice = 50000m; // BTC price
-
-        for (int i = 0; i < count; i++)
-        {
-            var isBuy = i % 2 == 0; // Alternate between buy and sell
-            var priceOffset = (decimal)(random.NextDouble() * 1000 - 500); // ±$500
-            var price = Math.Round(basePrice + priceOffset, 2);
-            var volume = Math.Round((decimal)(random.NextDouble() * 10 + 0.1), 4); // 0.1 to 10 BTC
-
-            orders.Add(new Ordering
-            {
-                OrdId = Guid.NewGuid(),
-                OrdNo = i + 1,
-                Symbol = symbol,
-                User = $"user{random.Next(1, 100)}",
-                IsBuy = isBuy,
-                Price = price,
-                Volume = volume,
-                Condition = OrderCondition.None,
-                Status = OrderStatus.Prepared,
-                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-            });
-        }
-
-        return orders;
-    }
-
-    static List<Ordering> GenerateMarketOrders(int count, string symbol)
-    {
-        var orders = new List<Ordering>();
-        var random = new Random(43);
-
-        for (int i = 0; i < count; i++)
-        {
-            var isBuy = i % 2 == 0;
-            var volume = Math.Round((decimal)(random.NextDouble() * 5 + 0.1), 4); // 0.1 to 5 BTC
-
-            orders.Add(new Ordering
-            {
-                OrdId = Guid.NewGuid(),
-                OrdNo = i + 1,
-                Symbol = symbol,
-                User = $"user{random.Next(1, 100)}",
-                IsBuy = isBuy,
-                Price = 0, // Market order (price = 0 means market order)
-                Volume = volume,
-                Condition = OrderCondition.IOC, // Market orders typically use IOC
-                Status = OrderStatus.Prepared,
-                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-            });
-        }
-
-        return orders;
-    }
-
-    static List<Ordering> GenerateMixedOrders(int count, string symbol)
-    {
-        var orders = new List<Ordering>();
-        var random = new Random(44);
+        var orders = new List<Ordering>(count); // Pre-allocate capacity
+        var random = new Random(42);
         var basePrice = 50000m;
+        var baseTimestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); // Generate ONCE
+
+        // Counters for statistics
+        int limitCount = 0, marketCount = 0, iocCount = 0, bocCount = 0, fokCount = 0;
 
         for (int i = 0; i < count; i++)
         {
-            var isBuy = i % 2 == 0;
-            var isMarketOrder = random.NextDouble() < 0.3; // 30% market orders, 70% limit orders
-            
+            var isBuy = random.Next(2) == 0; // 50/50 buy/sell
+            var rand = random.NextDouble();
+
             decimal price;
             OrderCondition condition;
+            decimal volume = Math.Round((decimal)(random.NextDouble() * 10 + 0.1), 4);
 
-            if (isMarketOrder)
-            {
-                price = 0; // Market order
-                condition = OrderCondition.IOC;
-            }
-            else
+            // Distribution: 60% Limit, 20% Market, 10% IOC, 5% BOC, 5% FOK
+            if (rand < 0.60) // 60% LIMIT ORDERS
             {
                 var priceOffset = (decimal)(random.NextDouble() * 1000 - 500);
                 price = Math.Round(basePrice + priceOffset, 2);
                 condition = OrderCondition.None;
+                limitCount++;
             }
-
-            var volume = Math.Round((decimal)(random.NextDouble() * 10 + 0.1), 4);
+            else if (rand < 0.80) // 20% MARKET ORDERS
+            {
+                price = 0;
+                condition = OrderCondition.IOC;
+                marketCount++;
+            }
+            else if (rand < 0.90) // 10% IOC ORDERS
+            {
+                var priceOffset = (decimal)(random.NextDouble() * 1000 - 500);
+                price = Math.Round(basePrice + priceOffset, 2);
+                condition = OrderCondition.IOC;
+                iocCount++;
+            }
+            else if (rand < 0.95) // 5% BOC ORDERS
+            {
+                var priceOffset = isBuy
+                    ? -(decimal)(random.NextDouble() * 300 + 200)
+                    : (decimal)(random.NextDouble() * 300 + 200);
+                price = Math.Round(basePrice + priceOffset, 2);
+                condition = OrderCondition.BOC;
+                bocCount++;
+            }
+            else // 5% FOK ORDERS
+            {
+                var priceOffset = (decimal)(random.NextDouble() * 1000 - 500);
+                price = Math.Round(basePrice + priceOffset, 2);
+                condition = OrderCondition.FOK;
+                volume = Math.Round((decimal)(random.NextDouble() * 5 + 0.5), 4);
+                fokCount++;
+            }
 
             orders.Add(new Ordering
             {
@@ -260,9 +212,18 @@ class Program
                 Volume = volume,
                 Condition = condition,
                 Status = OrderStatus.Prepared,
-                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                Timestamp = baseTimestamp + i  // Increment from base (no system call!)
             });
         }
+
+        // Print distribution
+        Console.WriteLine($"  Order Types Generated:");
+        Console.WriteLine($"    Limit (None):      {limitCount:N0} ({limitCount * 100.0 / count:F1}%)");
+        Console.WriteLine($"    Market:            {marketCount:N0} ({marketCount * 100.0 / count:F1}%)");
+        Console.WriteLine($"    IOC:               {iocCount:N0} ({iocCount * 100.0 / count:F1}%)");
+        Console.WriteLine($"    BOC:               {bocCount:N0} ({bocCount * 100.0 / count:F1}%)");
+        Console.WriteLine($"    FOK:               {fokCount:N0} ({fokCount * 100.0 / count:F1}%)");
+        Console.WriteLine();
 
         return orders;
     }

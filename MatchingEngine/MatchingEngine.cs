@@ -49,9 +49,30 @@ public class MatchingEngine
         // For market/IOC orders, try to match immediately without adding to book
         if (order.Condition == OrderCondition.IOC || isMarketOrder)
         {
+            var originalVolume = order.Volume;
             var matchResult = TryMatchOrder(order);
             
-            // Cancel any unfilled portion
+            // Check if any volume was matched
+            var matchedVolume = originalVolume - order.Volume;
+            
+            // If nothing matched at all
+            if (matchedVolume == 0)
+            {
+                order.Status = OrderStatus.Rejected;
+                
+                if (isMarketOrder)
+                {
+                    order.CancelReason = CancelReason.NoLiquidity;
+                    return MatchState.MONoLiquidity;
+                }
+                else
+                {
+                    order.CancelReason = CancelReason.ImmediateOrCancel;
+                    return MatchState.IOCCannotFill;
+                }
+            }
+            
+            // Cancel any unfilled portion (partial fill is OK)
             if (!order.IsFilled && order.Volume > 0)
             {
                 order.Status = OrderStatus.Cancelled;
@@ -118,8 +139,6 @@ public class MatchingEngine
 
     private MatchState TryMatchOrder(Ordering incomingOrder)
     {
-        var matched = false;
-
         while (!incomingOrder.IsFilled)
         {
             var restingOrder = incomingOrder.IsBuy ? Books.GetBestAskOrder() : Books.GetBestBidOrder();
@@ -131,11 +150,10 @@ public class MatchingEngine
             // Execute match
             var matchResult = ExecuteMatch(incomingOrder, restingOrder);
             if (matchResult == null) break;
-
-            matched = true;
         }
 
-        return matched ? MatchState.OrderAccepted : MatchState.OrderAccepted;
+        // Order accepted regardless of whether it matched or went into book
+        return MatchState.OrderAccepted;
     }
 
     private bool CanMatch(Ordering incoming, Ordering resting)

@@ -93,14 +93,19 @@ public class OrderBook
             return false;
 
         PriceLevel priceLevel = order.IsBuy ? _bidLevels[order.Price] : _askLevels[order.Price];
-        var success = priceLevel.FillOrder(order, volume);
+        
+        // Update PriceLevel's total volume
+        priceLevel.TotalVolume -= volume;
+        priceLevel.LastUpdated = DateTime.UtcNow;
 
-        if (success && order.IsFilled)
+        // If order is fully filled, remove it from book
+        if (order.IsFilled)
         {
             RemoveOrder(order.OrdId);
+            return true;
         }
 
-        return success;
+        return false;
     }
 
     public Depth? GetDepth(decimal price)
@@ -293,17 +298,6 @@ public abstract class PriceLevel
             }
             node = node.Next;
         }
-    }
-
-    public virtual bool FillOrder(Ordering order, decimal volume)
-    {
-        if (order.Volume < volume) return false;
-        
-        order.Volume -= volume;
-        TotalVolume -= volume;
-        LastUpdated = DateTime.UtcNow;
-        
-        return order.IsFilled;
     }
 }
 
