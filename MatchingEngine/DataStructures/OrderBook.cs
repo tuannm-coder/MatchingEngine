@@ -10,7 +10,7 @@ public class OrderBook
     private readonly Dictionary<decimal, AskPriceLevel> _askLevels;
     private readonly Dictionary<Guid, OrderNode> _orderIndex;
     
-    // Cache for sorted iteration
+    // Cache for sorted iteration (MUCH faster than GetSortedElements!)
     private List<decimal>? _sortedBidPrices;
     private List<decimal>? _sortedAskPrices;
     private bool _bidCacheDirty = true;
@@ -165,7 +165,7 @@ public class OrderBook
         return cumulativeVolume >= volume;
     }
     
-    // Get sorted prices with caching
+    // Get sorted prices with caching (FAST!)
     private List<decimal> GetSortedBidPrices()
     {
         if (_bidCacheDirty || _sortedBidPrices == null)

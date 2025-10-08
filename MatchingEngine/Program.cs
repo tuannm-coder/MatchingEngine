@@ -12,19 +12,40 @@ class Program
         Console.WriteLine("║          MATCHING ENGINE - ORDER TEST                     ║");
         Console.WriteLine("╚═══════════════════════════════════════════════════════════╝\n");
 
+        // Check build configuration
+        #if DEBUG
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine("⚠️  WARNING: Running in DEBUG mode!");
+        Console.WriteLine("   Performance will be 5-10x slower than Release build.");
+        Console.WriteLine("   Use: dotnet run --configuration Release\n");
+        Console.ResetColor();
+        #else
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine("✅ Running in RELEASE mode - Optimized performance\n");
+        Console.ResetColor();
+        #endif
+
         // Get number of orders from user
         Console.Write("Enter number of orders to generate (default 100000): ");
         var input = Console.ReadLine();
         var orderCount = string.IsNullOrWhiteSpace(input) ? 100000 : int.Parse(input);
 
+        // Ask if include FOK orders (they may slow down performance)
+        Console.Write("Include FOK orders? (y/n, default y): ");
+        var fokInput = Console.ReadLine();
+        var includeFOK = string.IsNullOrWhiteSpace(fokInput) || fokInput.ToLower() == "y";
+
         Console.WriteLine($"\n═══════════════════════════════════════════════════════════");
         Console.WriteLine($"  Step 1: Generating {orderCount:N0} orders...");
-        Console.WriteLine($"  Distribution: Limit (60%), Market (20%), IOC (10%), BOC (5%), FOK (5%)");
+        if (includeFOK)
+            Console.WriteLine($"  Distribution: Limit (60%), Market (20%), IOC (10%), BOC (5%), FOK (5%)");
+        else
+            Console.WriteLine($"  Distribution: Limit (63%), Market (21%), IOC (11%), BOC (5%), FOK (0%)");
         Console.WriteLine($"═══════════════════════════════════════════════════════════\n");
 
         // Generate orders (NOT timed)
         var genStopwatch = Stopwatch.StartNew();
-        var orders = GenerateRandomOrders(orderCount, "BTCUSDT");
+        var orders = GenerateRandomOrders(orderCount, "BTCUSDT", includeFOK);
         genStopwatch.Stop();
         
         Console.WriteLine($"  Orders generated in {genStopwatch.ElapsedMilliseconds:N0}ms");
@@ -57,9 +78,24 @@ class Program
         int matchedOrders = 0;
         int bocRejected = 0;
         int fokRejected = 0;
+        int iocRejected = 0;
+        int marketRejected = 0;
+        
+        // Order type counters for actual processing
+        int limitProcessed = 0, marketProcessed = 0, iocProcessed = 0, bocProcessed = 0, fokProcessed = 0;
 
         foreach (var order in orders)
         {
+            // Track order types being processed
+            if (order.Condition == OrderCondition.FOK) fokProcessed++;
+            else if (order.Condition == OrderCondition.BOC) bocProcessed++;
+            else if (order.Condition == OrderCondition.IOC)
+            {
+                if (order.Price == 0) marketProcessed++;
+                else iocProcessed++;
+            }
+            else limitProcessed++;
+
             var result = engine.AddOrder(order, order.Timestamp);
             processedOrders++;
 
@@ -77,6 +113,16 @@ class Program
             else if (result == MatchState.FOKCannotFill)
             {
                 fokRejected++;
+                rejectedOrders++;
+            }
+            else if (result == MatchState.IOCCannotFill)
+            {
+                iocRejected++;
+                rejectedOrders++;
+            }
+            else if (result == MatchState.MONoLiquidity)
+            {
+                marketRejected++;
                 rejectedOrders++;
             }
             else
@@ -97,10 +143,18 @@ class Program
         Console.WriteLine($"  │ ORDER STATISTICS                                        │");
         Console.WriteLine($"  └─────────────────────────────────────────────────────────┘");
         Console.WriteLine($"  Orders Processed:    {processedOrders:N0}");
+        Console.WriteLine($"    - Limit:           {limitProcessed:N0}");
+        Console.WriteLine($"    - Market:          {marketProcessed:N0}");
+        Console.WriteLine($"    - IOC:             {iocProcessed:N0}");
+        Console.WriteLine($"    - BOC:             {bocProcessed:N0}");
+        Console.WriteLine($"    - FOK:             {fokProcessed:N0} ← May slow down if high");
+        Console.WriteLine($"");
         Console.WriteLine($"  Accepted:            {acceptedOrders:N0} ({acceptedOrders * 100.0 / processedOrders:F1}%)");
         Console.WriteLine($"  Rejected:            {rejectedOrders:N0} ({rejectedOrders * 100.0 / processedOrders:F1}%)");
         Console.WriteLine($"    - BOC Rejected:    {bocRejected:N0}");
         Console.WriteLine($"    - FOK Rejected:    {fokRejected:N0}");
+        Console.WriteLine($"    - IOC Rejected:    {iocRejected:N0}");
+        Console.WriteLine($"    - Market No Liq:   {marketRejected:N0}");
         Console.WriteLine($"  Fully Matched:       {matchedOrders:N0}");
         Console.WriteLine($"");
         Console.WriteLine($"  ┌─────────────────────────────────────────────────────────┐");
@@ -135,6 +189,40 @@ class Program
         Console.WriteLine($"  Generation Time:     {genStopwatch.ElapsedMilliseconds:N0}ms (not counted in TPS)");
         Console.WriteLine($"  Processing Time:     {stopwatch.ElapsedMilliseconds:N0}ms (pure engine performance)");
         Console.WriteLine($"  Total Time:          {(genStopwatch.ElapsedMilliseconds + stopwatch.ElapsedMilliseconds):N0}ms");
+        Console.WriteLine($"");
+        Console.WriteLine($"  ⚠️  PERFORMANCE ANALYSIS:");
+        Console.WriteLine($"      Current Implementation: Cached Sorted List (Dictionary.Keys)");
+        Console.WriteLine($"      Cache rebuilds only when price levels change (dirty flag)");
+        Console.WriteLine($"");
+        
+        if (tps < 200000)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"      🔴 TPS is LOW! Expected: 400K+, Got: {tps:N0}");
+            Console.ResetColor();
+            Console.WriteLine($"      Analysis:");
+            Console.WriteLine($"      1. Running in DEBUG mode? (use --configuration Release)");
+            Console.WriteLine($"      2. FOK orders: {fokProcessed:N0} × O(n log n) = expensive!");
+            if (fokProcessed > 0)
+            {
+                var fokOverhead = (fokProcessed * 40 * Math.Log(40)) / 1000000.0;
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"         FOK overhead: ~{fokOverhead:F1}M operations");
+                Console.WriteLine($"         💡 Try: Disable FOK (answer 'n') to see baseline TPS");
+                Console.ResetColor();
+            }
+            Console.WriteLine($"      3. System under heavy load (check Task Manager)");
+        }
+        else
+        {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"      ✅ TPS is EXCELLENT! {tps:N0} orders/second");
+            Console.ResetColor();
+            if (fokProcessed > 0)
+            {
+                Console.WriteLine($"      Even with {fokProcessed:N0} FOK orders! Impressive!");
+            }
+        }
 
         Console.WriteLine($"\n╔═══════════════════════════════════════════════════════════╗");
         Console.WriteLine($"║                  COMPLETE! ✅                             ║");
@@ -143,7 +231,7 @@ class Program
         Console.ReadLine();
     }
 
-    static List<Ordering> GenerateRandomOrders(int count, string symbol)
+    static List<Ordering> GenerateRandomOrders(int count, string symbol, bool includeFOK = true)
     {
         var orders = new List<Ordering>(count); // Pre-allocate capacity
         var random = new Random(42);
@@ -162,28 +250,47 @@ class Program
             OrderCondition condition;
             decimal volume = Math.Round((decimal)(random.NextDouble() * 10 + 0.1), 4);
 
-            // Distribution: 60% Limit, 20% Market, 10% IOC, 5% BOC, 5% FOK
-            if (rand < 0.60) // 60% LIMIT ORDERS
+            // Distribution based on includeFOK flag
+            double limitThreshold, marketThreshold, iocThreshold, bocThreshold;
+            
+            if (includeFOK)
+            {
+                // With FOK: 60% Limit, 20% Market, 10% IOC, 5% BOC, 5% FOK
+                limitThreshold = 0.60;
+                marketThreshold = 0.80;
+                iocThreshold = 0.90;
+                bocThreshold = 1;
+            }
+            else
+            {
+                // Without FOK: 63% Limit, 21% Market, 11% IOC, 5% BOC, 0% FOK
+                limitThreshold = 0.63;
+                marketThreshold = 0.84;
+                iocThreshold = 0.95;
+                bocThreshold = 1.0;
+            }
+
+            if (rand < limitThreshold) // LIMIT ORDERS
             {
                 var priceOffset = (decimal)(random.NextDouble() * 1000 - 500);
                 price = Math.Round(basePrice + priceOffset, 2);
                 condition = OrderCondition.None;
                 limitCount++;
             }
-            else if (rand < 0.80) // 20% MARKET ORDERS
+            else if (rand < marketThreshold) // MARKET ORDERS
             {
                 price = 0;
                 condition = OrderCondition.IOC;
                 marketCount++;
             }
-            else if (rand < 0.90) // 10% IOC ORDERS
+            else if (rand < iocThreshold) // IOC ORDERS
             {
                 var priceOffset = (decimal)(random.NextDouble() * 1000 - 500);
                 price = Math.Round(basePrice + priceOffset, 2);
                 condition = OrderCondition.IOC;
                 iocCount++;
             }
-            else if (rand < 0.95) // 5% BOC ORDERS
+            else if (rand < bocThreshold) // BOC ORDERS
             {
                 var priceOffset = isBuy
                     ? -(decimal)(random.NextDouble() * 300 + 200)
@@ -192,7 +299,7 @@ class Program
                 condition = OrderCondition.BOC;
                 bocCount++;
             }
-            else // 5% FOK ORDERS
+            else // FOK ORDERS (only if includeFOK)
             {
                 var priceOffset = (decimal)(random.NextDouble() * 1000 - 500);
                 price = Math.Round(basePrice + priceOffset, 2);

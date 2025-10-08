@@ -136,4 +136,62 @@ public class IndexedHeap<T> : IEnumerable<T> where T : IComparable<T>
 
     public IEnumerator<T> GetEnumerator() => _heap.GetEnumerator();
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+    /// <summary>
+    /// Get all elements in sorted order without destroying the heap
+    /// More efficient than rebuilding sorted list from dictionary keys
+    /// </summary>
+    public List<T> GetSortedElements()
+    {
+        if (_heap.Count == 0)
+            return new List<T>();
+
+        // Clone the heap to avoid destroying original
+        var tempHeap = new List<T>(_heap);
+        var tempIndexMap = new Dictionary<T, int>(_indexMap);
+        var result = new List<T>(_heap.Count);
+
+        // Extract all elements (they come out in sorted order)
+        while (tempHeap.Count > 0)
+        {
+            var root = tempHeap[0];
+            result.Add(root);
+
+            // Remove root (simplified extract without full heap maintenance)
+            var lastIndex = tempHeap.Count - 1;
+            if (lastIndex == 0)
+            {
+                tempHeap.RemoveAt(0);
+                break;
+            }
+
+            // Move last to root and heapify down
+            tempHeap[0] = tempHeap[lastIndex];
+            tempHeap.RemoveAt(lastIndex);
+            HeapifyDownTemp(tempHeap, 0);
+        }
+
+        return result;
+    }
+
+    private void HeapifyDownTemp(List<T> heap, int index)
+    {
+        while (true)
+        {
+            var largest = index;
+            var leftChild = 2 * index + 1;
+            var rightChild = 2 * index + 2;
+
+            if (leftChild < heap.Count && Compare(heap[leftChild], heap[largest]) > 0)
+                largest = leftChild;
+
+            if (rightChild < heap.Count && Compare(heap[rightChild], heap[largest]) > 0)
+                largest = rightChild;
+
+            if (largest == index) break;
+
+            (heap[index], heap[largest]) = (heap[largest], heap[index]);
+            index = largest;
+        }
+    }
 }
