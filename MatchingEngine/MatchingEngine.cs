@@ -1,31 +1,26 @@
 using Enum;
-using Extension;
-using Data.Models;
 using MatchEngine.DataStructures;
-using MatchEngine.Interfaces;
 using MatchEngine.Models;
 
 namespace MatchingEngine;
 
-public class OptimizeMatchingEngine : IMatchHandler, IDepthHandler, IFeeProvider
+public class OptimizeMatchingEngine
 {
     private readonly int _precision;
     private readonly decimal _stepSize;
-    private readonly IMatchHandler _handler;
-    private readonly IDepthHandler _depther;
-    private readonly IFeeProvider _feeder;
+    private readonly decimal _makerFeeRate;
+    private readonly decimal _takerFeeRate;
 
-    public OptimizedOrderBook Books { get; }
+    public OrderBook Books { get; }
 
-    public OptimizedMatchingEngine(IMatchHandler handler, IDepthHandler depther, IFeeProvider feeProvider, decimal stepSize, int pricePrecision = 0)
+    public OptimizeMatchingEngine(decimal stepSize, int pricePrecision = 0, decimal makerFeeRate = 0.001m, decimal takerFeeRate = 0.002m)
     {
         _precision = pricePrecision >= 0 ? pricePrecision : throw new Exception($"Invalid value of {nameof(pricePrecision)}");
         _stepSize = stepSize >= 0 ? stepSize : throw new Exception($"Invalid value of {nameof(stepSize)}");
-        _handler = handler;
-        _depther = depther;
-        _feeder = feeProvider;
+        _makerFeeRate = makerFeeRate;
+        _takerFeeRate = takerFeeRate;
 
-        Books = new OptimizedOrderBook(this);
+        Books = new OrderBook();
     }
 
     public MatchState AddOrder(Ordering order, long timestamp, bool isOrderTriggered = false)
@@ -34,7 +29,6 @@ public class OptimizeMatchingEngine : IMatchHandler, IDepthHandler, IFeeProvider
             return MatchState.OrderInvalid;
 
         order.Status = OrderStatus.Listed;
-        _handler?.OnAccept(order.Clone());
 
         // Check conditions
         var state = CheckOrderConditions(order);
@@ -60,7 +54,6 @@ public class OptimizeMatchingEngine : IMatchHandler, IDepthHandler, IFeeProvider
         {
             order.Status = OrderStatus.Cancelled;
             order.CancelReason = CancelReason.UserRequested;
-            _handler?.OnCancel(order);
             return MatchState.CancelAcepted;
         }
 
@@ -76,7 +69,6 @@ public class OptimizeMatchingEngine : IMatchHandler, IDepthHandler, IFeeProvider
         {
             order.Status = OrderStatus.Rejected;
             order.CancelReason = CancelReason.BookOrCancel;
-            _handler?.OnCancel(order);
             return MatchState.BOCCannotBook;
         }
 
@@ -86,7 +78,6 @@ public class OptimizeMatchingEngine : IMatchHandler, IDepthHandler, IFeeProvider
         {
             order.Status = OrderStatus.Rejected;
             order.CancelReason = CancelReason.FillOrKill;
-            _handler?.OnCancel(order);
             return MatchState.FOKCannotFill;
         }
 
@@ -110,7 +101,6 @@ public class OptimizeMatchingEngine : IMatchHandler, IDepthHandler, IFeeProvider
             if (matchResult == null) break;
 
             matched = true;
-            _handler?.OnOrderMatch(matchResult);
         }
 
         return matched ? MatchState.OrderAccepted : MatchState.OrderAccepted;
@@ -171,24 +161,11 @@ public class OptimizeMatchingEngine : IMatchHandler, IDepthHandler, IFeeProvider
 
     private decimal CalculateFee(Ordering order, decimal volume, decimal price)
     {
-        var feeRate = order.IsBuy ? 
-            _feeder.GetTakerFee(order.FeeId) : 
-            _feeder.GetMakerFee(order.FeeId);
+        // Incoming order is taker, resting order is maker
+        var feeRate = order.IsBuy ? _takerFeeRate : _makerFeeRate;
         
         return order.IsBuy ? 
             Math.Round(volume * feeRate, _precision) : 
             Math.Round(volume * price * feeRate, _precision);
     }
-
-    // Interface implementations
-    public void OnAccept(Ordering order) => _handler?.OnAccept(order);
-    public void OnCancel(Ordering order) => _handler?.OnCancel(order);
-    public void OnOrderMatch(Matching match) => _handler?.OnOrderMatch(match);
-    public void OnOrderTriggered(Ordering order) => _handler?.OnOrderTriggered(order);
-    public void OnSelfMatch(Matching match) => _handler?.OnSelfMatch(match);
-    public void OnDecrement(Ordering order, decimal decrement) => _handler?.OnDecrement(order, decrement);
-    public void OnDepthChanged(BookInfo book) => _depther?.OnDepthChanged(book);
-    public void OnMarketChanged(MarketInfo market) => _depther?.OnMarketChanged(market);
-    public decimal GetMakerFee(int feeId) => _feeder?.GetMakerFee(feeId) ?? 0;
-    public decimal GetTakerFee(int feeId) => _feeder?.GetTakerFee(feeId) ?? 0;
 }

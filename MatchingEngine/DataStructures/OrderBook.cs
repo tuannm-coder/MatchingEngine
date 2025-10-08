@@ -1,13 +1,9 @@
-using Core.Extension;
-using Data.Models;
-using MatchEngine.Interfaces;
 using MatchEngine.Models;
 
 namespace MatchEngine.DataStructures;
 
-public class OptimizedOrderBook : IDepthHandler
+public class OrderBook
 {
-    private readonly IDepthHandler _depthHandler;
     private readonly IndexedHeap<decimal> _bidHeap;      // Max heap for bids
     private readonly IndexedHeap<decimal> _askHeap;     // Min heap for asks
     private readonly Dictionary<decimal, BidPriceLevel> _bidLevels;
@@ -20,9 +16,8 @@ public class OptimizedOrderBook : IDepthHandler
     private bool _bidCacheDirty = true;
     private bool _askCacheDirty = true;
 
-    public OptimizedOrderBook(IDepthHandler depthHandler)
+    public OrderBook()
     {
-        _depthHandler = depthHandler;
         _bidHeap = new IndexedHeap<decimal>(true);   // Max heap
         _askHeap = new IndexedHeap<decimal>(false);  // Min heap
         _bidLevels = new Dictionary<decimal, BidPriceLevel>();
@@ -108,25 +103,25 @@ public class OptimizedOrderBook : IDepthHandler
         return success;
     }
 
-    public DepthInfo? GetDepth(decimal price)
+    public Depth? GetDepth(decimal price)
     {
         if (_bidLevels.TryGetValue(price, out var bidLevel))
         {
-            return new DepthInfo
+            return new Depth
             {
                 Price = price,
                 Volume = bidLevel.TotalVolume,
-                LastChanged = Epoch.MsNow
+                LastChanged = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             };
         }
 
         if (_askLevels.TryGetValue(price, out var askLevel))
         {
-            return new DepthInfo
+            return new Depth
             {
                 Price = price,
                 Volume = askLevel.TotalVolume,
-                LastChanged = Epoch.MsNow
+                LastChanged = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             };
         }
 
@@ -244,10 +239,6 @@ public class OptimizedOrderBook : IDepthHandler
             InvalidateAskCache();  // Invalidate cache when removing price level
         }
     }
-
-    // IDepthHandler implementation
-    public void OnDepthChanged(BookInfo book) => _depthHandler?.OnDepthChanged(book);
-    public void OnMarketChanged(MarketInfo market) => _depthHandler?.OnMarketChanged(market);
 }
 
 // Supporting classes
