@@ -151,18 +151,12 @@ Prepared → Listed → [Matched] → Filled/Cancelled/Rejected
 ## 💡 Usage Example
 
 ```csharp
-// Create handlers for match events, depth changes, and fees
-IMatchHandler matchHandler = new MyMatchHandler();
-IDepthHandler depthHandler = new MyDepthHandler();
-IFeeProvider feeProvider = new MyFeeProvider();
-
 // Initialize the matching engine
-var engine = new MatchingEngine(
-    matchHandler: matchHandler,
-    depther: depthHandler,
-    feeProvider: feeProvider,
+var engine = new OptimizeMatchingEngine(
     stepSize: 0.01m,          // Minimum price increment
-    pricePrecision: 2         // Decimal places for prices
+    pricePrecision: 2,        // Decimal places for prices
+    makerFeeRate: 0.001m,     // 0.1% maker fee
+    takerFeeRate: 0.002m      // 0.2% taker fee
 );
 
 // Create and submit a buy order
@@ -173,7 +167,6 @@ var buyOrder = new Ordering
     Price = 100.50m,
     Volume = 10m,
     User = "user123",
-    FeeId = 1,
     Condition = OrderCondition.None,
     Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
 };
@@ -200,6 +193,11 @@ switch (result)
 
 // Cancel an order
 var cancelResult = engine.CancelOrder(buyOrder.OrdId);
+
+// Access order book information
+var bestBid = engine.Books.BestBidPrice;
+var bestAsk = engine.Books.BestAskPrice;
+Console.WriteLine($"Spread: {bestBid} - {bestAsk}");
 ```
 
 ## 🎯 Matching Algorithm
@@ -241,26 +239,26 @@ Where:
 - `n` = number of price levels
 - `k` = number of matches for an order
 
-## 🔌 Interfaces
+## 💰 Fee Structure
 
-### IMatchHandler
-Handles match-related events:
-- `OnAccept(Ordering order)` - Order accepted
-- `OnCancel(Ordering order)` - Order cancelled
-- `OnOrderMatch(Matching match)` - Orders matched
-- `OnSelfMatch(Matching match)` - Self-match detected
-- `OnOrderTriggered(Ordering order)` - Stop order triggered
-- `OnDecrement(Ordering order, decimal decrement)` - Order partially filled
+The matching engine uses a simple maker-taker fee model:
 
-### IDepthHandler
-Handles order book depth changes:
-- `OnDepthChanged(BookInfo book)` - Price level changed
-- `OnMarketChanged(MarketInfo market)` - Market statistics changed
+- **Maker Fee**: Applied to orders that add liquidity to the book (resting orders)
+- **Taker Fee**: Applied to orders that remove liquidity from the book (incoming orders that match)
 
-### IFeeProvider
-Provides fee rates:
-- `GetMakerFee(int feeId)` - Get maker fee rate
-- `GetTakerFee(int feeId)` - Get taker fee rate
+Fees are configurable at engine initialization:
+```csharp
+var engine = new OptimizeMatchingEngine(
+    stepSize: 0.01m,
+    pricePrecision: 2,
+    makerFeeRate: 0.001m,  // 0.1% for makers
+    takerFeeRate: 0.002m   // 0.2% for takers
+);
+```
+
+Fee calculation:
+- **For buyers**: `fee = volume × feeRate`
+- **For sellers**: `fee = volume × price × feeRate`
 
 ## 🎲 Self-Match Actions
 
@@ -288,10 +286,9 @@ The engine tracks comprehensive market statistics:
 - **Nullable Reference Types** - Enabled for null safety
 
 ### Key Design Patterns
-- **Strategy Pattern** - Pluggable handlers (IMatchHandler, IDepthHandler, IFeeProvider)
-- **Repository Pattern** - Order storage and retrieval
-- **Observer Pattern** - Event notifications via handlers
+- **Repository Pattern** - Order storage and retrieval via OrderBook
 - **Factory Pattern** - Order and match creation
+- **Template Method** - Order matching flow with extensible conditions
 
 ### Memory Efficiency
 - Price level pooling via dictionaries
@@ -352,13 +349,11 @@ When contributing to this engine, please ensure:
 
 5. **Stop Orders**: Framework supports stop orders but implementation requires additional logic.
 
-6. **Dependencies**: Requires external implementations of:
-   - `Extension` namespace (likely contains helper extensions)
-   - `Data.Models` namespace
-   - `MatchEngine.Interfaces` namespace
+6. **Event Handling**: The engine processes orders synchronously. For asynchronous event handling (notifications, logging, etc.), consider wrapping the engine with an event publisher.
 
 ## 🔮 Future Enhancements
 
+- [ ] Event-driven architecture with callbacks/handlers for match events
 - [ ] Thread-safe concurrent operations
 - [ ] Database persistence layer
 - [ ] Stop-loss and take-profit orders

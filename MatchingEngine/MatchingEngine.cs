@@ -1,10 +1,11 @@
 using Enum;
 using MatchEngine.DataStructures;
 using MatchEngine.Models;
+using MatchingEngine.Extension;
 
 namespace MatchingEngine;
 
-public class OptimizeMatchingEngine
+public class MatchingEngine
 {
     private readonly int _precision;
     private readonly decimal _stepSize;
@@ -13,7 +14,7 @@ public class OptimizeMatchingEngine
 
     public OrderBook Books { get; }
 
-    public OptimizeMatchingEngine(decimal stepSize, int pricePrecision = 0, decimal makerFeeRate = 0.001m, decimal takerFeeRate = 0.002m)
+    public MatchingEngine(decimal stepSize, int pricePrecision = 0, decimal makerFeeRate = 0.001m, decimal takerFeeRate = 0.002m)
     {
         _precision = pricePrecision >= 0 ? pricePrecision : throw new Exception($"Invalid value of {nameof(pricePrecision)}");
         _stepSize = stepSize >= 0 ? stepSize : throw new Exception($"Invalid value of {nameof(stepSize)}");
@@ -28,19 +29,45 @@ public class OptimizeMatchingEngine
         if (order == null)
             return MatchState.OrderInvalid;
 
+        // Handle market orders (Price = 0)
+        bool isMarketOrder = order.Price == 0;
+        if (isMarketOrder)
+        {
+            // Set price to guarantee match
+            order.Price = order.IsBuy ? decimal.MaxValue : decimal.MinValue;
+            // Market orders should use IOC if not already set
+            if (order.Condition == OrderCondition.None)
+                order.Condition = OrderCondition.IOC;
+        }
+
         order.Status = OrderStatus.Listed;
 
         // Check conditions
         var state = CheckOrderConditions(order);
         if (state != MatchState.OrderAccepted) return state;
 
-        // Add to order book
+        // For market/IOC orders, try to match immediately without adding to book
+        if (order.Condition == OrderCondition.IOC || isMarketOrder)
+        {
+            var matchResult = TryMatchOrder(order);
+            
+            // Cancel any unfilled portion
+            if (!order.IsFilled && order.Volume > 0)
+            {
+                order.Status = OrderStatus.Cancelled;
+                order.CancelReason = CancelReason.ImmediateOrCancel;
+            }
+            
+            return matchResult;
+        }
+
+        // Add to order book for other order types
         Books.AddOrder(order);
 
         // Try to match
-        var matchResult = TryMatchOrder(order);
+        var result = TryMatchOrder(order);
         
-        return matchResult;
+        return result;
     }
 
     public MatchState CancelOrder(Guid id)
@@ -62,17 +89,22 @@ public class OptimizeMatchingEngine
 
     private MatchState CheckOrderConditions(Ordering order)
     {
-        // BOC condition
-        if (order.Condition == OrderCondition.BOC && 
-            (order.IsBuy && Books.BestAskPrice <= order.Price || 
-             !order.IsBuy && order.Price <= Books.BestBidPrice))
+        // BOC condition - order must not match immediately
+        if (order.Condition == OrderCondition.BOC)
         {
-            order.Status = OrderStatus.Rejected;
-            order.CancelReason = CancelReason.BookOrCancel;
-            return MatchState.BOCCannotBook;
+            var wouldMatch = order.IsBuy 
+                ? Books.BestAskPrice.HasValue && Books.BestAskPrice.Value <= order.Price
+                : Books.BestBidPrice.HasValue && order.Price <= Books.BestBidPrice.Value;
+            
+            if (wouldMatch)
+            {
+                order.Status = OrderStatus.Rejected;
+                order.CancelReason = CancelReason.BookOrCancel;
+                return MatchState.BOCCannotBook;
+            }
         }
 
-        // FOK condition
+        // FOK condition - order must be completely fillable
         if (order.Condition == OrderCondition.FOK && 
             !Books.CheckCanFillOrder(order.IsBuy, order.Volume, order.Price))
         {
@@ -153,7 +185,7 @@ public class OptimizeMatchingEngine
             BidFee = incomingOrder.IsBuy ? restingFee : incomingFee,
             BidCost = cost,
             State = TradingType.Matched,
-            Timestamp = Epoch.MsNow
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
         };
 
         return matching;
